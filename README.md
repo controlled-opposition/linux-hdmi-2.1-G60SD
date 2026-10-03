@@ -1,79 +1,105 @@
-# Samsung Odyssey G60SD: Linux HDMI FRL + DSC workaround
+# Enable HDMI FRL and DSC on the Samsung Odyssey G60SD
 
-Enables **2560×1440 at 360 Hz with 10-bit color over HDMI FRL + DSC** on the Samsung Odyssey OLED G60SD.
+Use this EDID override to enable 2560×1440 at 360 Hz with 10-bit color on a Samsung Odyssey OLED G60SD.
 
-Tested with an AMD Navi 48 / RX 9070-family GPU, CachyOS Linux **7.2.8**, KDE Plasma on Wayland, and the monitor's **HDMI 2 input**. Other hardware/kernel combinations are not verified. This requires a driver and GPU with FRL + DSC support; an EDID override cannot add that support.
+The fix works on the tested AMD Navi 48 GPU with CachyOS Linux 7.2.8 and KDE Plasma on Wayland. The test used the monitor's HDMI 2 input. Other GPUs, kernels, and monitor firmware versions remain untested.
 
-## Install
+## Prepare the connection
+
+Use this override only with a G60SD. Your GPU and driver must support HDMI FRL and DSC.
+
+The override disables 12-bit DSC to avoid a driver bug. It retains 10-bit DSC and uncompressed HDMI deep-color support.
+
+Connect the monitor to the GPU with an Ultra High Speed HDMI cable. Disable HDR and VRR for the initial test. This setup has not been tested with HDR, VRR, or suspend and resume.
+
+Keep a DisplayPort connection or a previous boot entry available for recovery. Download the files:
 
 ```sh
 git clone https://github.com/controlled-opposition/linux-hdmi-2.1-G60SD.git
 cd linux-hdmi-2.1-G60SD
 ```
 
-Use a direct GPU HDMI connection and an Ultra High Speed HDMI cable. Start with **HDR and VRR disabled**; they and suspend/resume have not been tested. Keep a working DisplayPort connection or previous boot entry available for recovery. Use this EDID only with a G60SD.
+Find the connected GPU connector:
 
-### NixOS
+```sh
+grep -H . /sys/class/drm/card*-HDMI-A-*/status
+```
 
-1. Copy [`nixos.nix`](./nixos.nix) and [`g60sd-hdmi.bin`](./g60sd-hdmi.bin) into your configuration directory, keeping them next to each other.
-2. Import `nixos.nix` in your host configuration. Review the GPU connector name and AMDGPU feature mask in that file.
-3. Build/install a boot generation and reboot.
+Use that connector name in the configuration below. `HDMI-A-1` identifies a GPU connector, not the monitor's HDMI 1 input. Do not apply the override to a connector used by another monitor.
 
-The module targets **`HDMI-A-1`**, with a commented `HDMI-A-2` alternative. These are GPU connector names, not the monitor's physical input numbers. Apply the override only to the connector used by the G60SD.
+On the tested kernel, `0x400` enables AMDGPU FRL. Preserve your existing feature bits. This command prints the combined kernel parameter:
 
-### Other Linux distributions
+```sh
+mask=$(cat /sys/module/amdgpu/parameters/dcfeaturemask)
+printf 'amdgpu.dcfeaturemask=0x%x\n' "$((mask | 0x400))"
+```
 
-1. Identify the connected GPU connector:
+The tested system used `amdgpu.dcfeaturemask=0x402`. Use the value printed for your system.
 
-   ```sh
-   grep -H . /sys/class/drm/card*-HDMI-A-*/status
-   ```
+## Install on NixOS
 
-2. Install the EDID:
-
-   ```sh
-   sudo install -Dm644 g60sd-hdmi.bin /lib/firmware/edid/g60sd-hdmi.bin
-   ```
-
-3. Add these kernel parameters to your bootloader configuration, replacing `HDMI-A-1` if needed:
-
-   ```text
-   amdgpu.dcfeaturemask=0x402 drm.edid_firmware=HDMI-A-1:edid/g60sd-hdmi.bin
-   ```
-
-   On the tested kernel, FRL is the `0x400` feature bit. `0x402` preserves the tested system's existing `0x2` bit. Check `/sys/module/amdgpu/parameters/dcfeaturemask` and preserve your existing feature bits rather than blindly replacing the mask.
-
-4. Include `/lib/firmware/edid/g60sd-hdmi.bin` in the initramfs, regenerate it, and update your bootloader as required by your distribution. On **mkinitcpio-based systems**, append that path to the existing `FILES` array in `/etc/mkinitcpio.conf`, then run:
-
-   ```sh
-   sudo mkinitcpio -P
-   ```
-
+1. Copy [`nixos.nix`](./nixos.nix) and [`g60sd-hdmi.bin`](./g60sd-hdmi.bin) into your configuration directory. Keep the files next to each other.
+2. Import `nixos.nix` from your host configuration.
+3. Set the connector name and feature mask in `nixos.nix`. The module includes a commented option for `HDMI-A-2`.
+4. Build and install a boot generation with your usual NixOS rebuild command.
 5. Reboot.
 
-### KDE display settings
+## Install on another Linux distribution
 
-Select **2560×1440 at 360 Hz** and leave **Color resolution on Automatic**. Automatic selected 10-bit on the tested setup after applying the fix; explicitly selecting 10-bit is not required. The EDID keeps 120 Hz preferred, so select 360 Hz manually after installation.
+1. Install the EDID file:
 
-## Verify
+	```sh
+	sudo install -Dm644 g60sd-hdmi.bin /lib/firmware/edid/g60sd-hdmi.bin
+	```
+
+2. Add these kernel parameters to your bootloader configuration. Replace the feature mask and connector name with the values from the preparation steps.
+
+	```text
+	amdgpu.dcfeaturemask=0x402 drm.edid_firmware=HDMI-A-1:edid/g60sd-hdmi.bin
+	```
+
+3. Include `/lib/firmware/edid/g60sd-hdmi.bin` in the initramfs. On a mkinitcpio-based system, append that path to the existing `FILES` array in `/etc/mkinitcpio.conf`.
+4. Regenerate the initramfs with your distribution's tool. For mkinitcpio, run `sudo mkinitcpio -P`.
+5. Update the bootloader configuration if your distribution requires that step.
+6. Reboot.
+
+## Select the display mode
+
+In KDE Display settings, select 2560×1440 at 360 Hz. Leave **Color resolution** on **Automatic**.
+
+Automatic selects 10-bit color on the tested setup. You do not need to select 10-bit explicitly. The override keeps 120 Hz as the preferred mode, so select 360 Hz after installation.
+
+## Verify the active mode and color depth
+
+Check the active mode:
 
 ```sh
 kscreen-doctor -o
+```
+
+Look for an active 2560×1440 mode at 360 Hz and **automatic (10)** under **Color resolution**.
+
+Read the driver's stream color depth:
+
+```sh
 sudo cat /sys/kernel/debug/dri/1/crtc-0/amdgpu_current_bpc
 ```
 
-KDE should show **1440p/360 Hz active** and **automatic (10)**. The driver should report **`Current: 10`**. Debugfs GPU/CRTC numbers may differ; use the active CRTC on the GPU driving the monitor. Inactive CRTCs can return `No such device`.
+The expected output is `Current: 10`. The GPU and CRTC numbers can differ on your system. Read the active CRTC on the GPU connected to the monitor. An inactive CRTC returns `No such device`.
 
-If Automatic does not select 10-bit, try explicitly selecting 10-bit and repeat the driver check. Do not rely on the HDMI hardware dump's `Depth: 8` field during DSC: the driver clears that register even for a 10-bit stream.
+If Automatic selects 8-bit color, select 10-bit in KDE and repeat the check. Use `amdgpu_current_bpc` to verify color depth. The HDMI hardware dump can report `Depth: 8` during DSC even when the stream uses 10-bit color.
 
-## Limitations and rollback
+## Remove the override
 
-The override exposes native high-refresh timings and works around an AMDGPU DSC color-depth bug by hiding **12-bit DSC support**. It retains 10-bit DSC and uncompressed HDMI deep-color capabilities. Monitor serial numbers are removed from the supplied EDIDs.
+After a monitor firmware or kernel update, check whether you still need the override. Linux continues to use the override until you remove it.
 
-Recheck the workaround after monitor firmware or kernel updates: it continues to replace the native EDID until removed.
+1. Remove the `nixos.nix` import or the `drm.edid_firmware` kernel parameter, according to your installation method.
+2. Restore your previous AMDGPU feature mask.
+3. Rebuild NixOS or regenerate the initramfs and bootloader configuration.
+4. Reboot.
 
-To undo it, remove the EDID kernel parameter or NixOS module import, restore your previous AMDGPU feature mask, regenerate the initramfs or rebuild NixOS, and reboot. If the display fails, use the previous working boot entry.
+If the display fails, boot the previous working entry or use DisplayPort to remove the override.
 
 ## Acknowledgments
 
-Inspired by [legin449/linux-hdmi-2.1-G80SD](https://github.com/legin449/linux-hdmi-2.1-G80SD). This repository uses G60SD-native timings and capabilities, not the G80SD EDID.
+[legin449/linux-hdmi-2.1-G80SD](https://github.com/legin449/linux-hdmi-2.1-G80SD) provided the approach for exposing high-refresh timings. This repository uses the G60SD's native timings and capabilities, not the G80SD EDID.
